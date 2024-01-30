@@ -31,7 +31,7 @@ colnames(NK_data_cleaned)
 current_names <- colnames(NK_data_cleaned)
 
 
-#### Rename Columns as Parent Poppulations ####
+#### Rename Columns as Parent Populations ####
 
 # Define the patterns and their replacements for the new dataset
 patterns_and_replacements <- list(
@@ -177,7 +177,7 @@ for (i in (p4_index + 1):ncol(NK_data_cleaned)) {
   NK_data_cleaned[, i] <- NK_data_cleaned[, i] / NK_data_cleaned[, p4_index] * 100
 }
 
-# Remove uneeded columns
+# Remove unneeded columns
 columns_to_remove <- which(colnames(NK_data_cleaned) %in% c("P1", "P2", "P3","P5","P6","P7"))
 NK_data_cleaned <- NK_data_cleaned[, -columns_to_remove]
 

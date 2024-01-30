@@ -57,6 +57,22 @@ colnames(m_data_cleaned) <- current_names
 # Check the new column names
 colnames(m_data_cleaned)
 
+#### Further Cleaning ####
+
+# Get current column names
+current_names <- colnames(m_data_cleaned)
+
+# Remove "QValue: " and " , " from the column names
+current_names <- gsub("Q[0-9]+: ", "", current_names)  # Remove "QValue: "
+current_names <- gsub(" , ", "", current_names)        # Remove " , "
+
+# Assign the new names to the data frame
+colnames(m_data_cleaned) <- current_names
+
+# Check the new column names
+colnames(m_data_cleaned)
+
+
 #### Monocyte Total Cell Count Calculation ####
 
 # List of parent population columns in the order of hierarchy

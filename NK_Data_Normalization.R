@@ -187,7 +187,7 @@ colnames(NK_data_cleaned)
 #### Renaming columns back to populations for further analysis ####
 
 # Renaming columns with gsub
-colnames(NK_data_cleaned)[colnames(NK_data_cleaned) == "P4"] <- "CD45 Raw Counts"
+colnames(NK_data_cleaned)[colnames(NK_data_cleaned) == "P4"] <- "NKpanel_CD45_Raw_Counts"
 colnames(NK_data_cleaned) <- gsub("^P8", "Total_NK", colnames(NK_data_cleaned))
 colnames(NK_data_cleaned) <- gsub("^P9_1", "NK_CD56-CD16+", colnames(NK_data_cleaned))
 colnames(NK_data_cleaned) <- gsub("^P9_2", "NKbright", colnames(NK_data_cleaned))

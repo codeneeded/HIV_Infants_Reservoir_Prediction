@@ -61,6 +61,11 @@ demographics_filtered <- demographics_filtered %>%
   filter(row_number() == 1) %>%
   ungroup()
 
+# Drop the 'VISIT DATE' column and rename other specified columns
+demographics_filtered <- demographics_filtered %>%
+  select(-`VISIT DATE`) %>%
+  rename(Sex = SEX, Age = `AGE IN MONTHS`, `Viral Titre` = `HIV cp/mL`)
+
 #### Save Output ####
 output_file <- paste0(out.path, "Viral_Titres.csv")
 
@@ -70,6 +75,13 @@ write.csv(demographics_filtered, output_file, row.names = FALSE)
 #### Clean the vaccine databases ####
 tet_vaccine <- tet_vaccine[1:4]
 m_vaccine <- m_vaccine[1:4]
+
+# Rename 'Age in mths' column to 'Age'
+tet_vaccine <- tet_vaccine %>%
+  rename(Age = `Age in mths`)
+# Rename 'Age in mths' column to 'Age'
+m_vaccine <- m_vaccine %>%
+  rename(Age = `Age in mths`)
 
 #### Save Output ####
 tet_output_file <- paste0(out.path, "Tetanus_Serology_Clean.csv")

@@ -5,20 +5,21 @@ library(limma)
 library(dplyr)
 library(ggplot2)
 library(ggrepel)
-library(lme4)
+library(lmerTest)
 library(broom.mixed)
 library(pheatmap)
+
 #### Paths ####
 
 in.path <- 'C:/Users/axi313/Documents/HIV_Infants_Reservoir_Prediction/Cleaned_datasets/'
-out.path <- 'C:/Users/axi313/Documents/HIV_Infants_Reservoir_Prediction/Monocyte_Linear_Model/'
+out.path <- 'C:/Users/axi313/Documents/HIV_Infants_Reservoir_Prediction/Monocyte_Mixed_Model_Output/'
 
 #### Read in Files ####
 m_data <- read_csv(paste0(in.path,"Monocyte_data_cleaned_normalized_to_CD45.csv"))
 demographics <- read_csv(paste0(in.path,"Viral_Titres.csv"))
 
 
-### Clean and combine datasets ###
+#### Clean and combine datasets ####
 
 # Get the names of all columns
 column_names <- names(demographics)
@@ -33,7 +34,11 @@ demographics <- demographics[column_names]
 monocytes <- inner_join(demographics, m_data, by = c("PID", "Age"))
 
 monocytes <- as.data.frame(monocytes)
+# Assuming 'group_variable' is your factor variable for groups in 'data_frame'
+monocytes$Group <- as.factor(monocytes$Group)
+monocytes$Group <- relevel(monocytes$Group, ref = "HEU")
 str(monocytes)
+
 #### Linear Modeling with Limma ####
 
 # Extracting relevant columns
@@ -67,11 +72,10 @@ corfit <- duplicateCorrelation(v, block = covariates$PID)
 fit_voom <- lmFit(v, design, block = covariates$PID, correlation = corfit$consensus)
 fit_voom <- eBayes(fit_voom)
 
-
 # Extract results
-results_with_voom <- topTable(fit_voom, coef = "GroupHEU")
+results_with_voom <- topTable(fit_voom, coef = "GroupHEI")
 
-# HEU vs HEI, +ve is higher in HEU, -ve is higher in HEI
+# HEU vs HEI, +ve is higher in HEI, -ve is higher in HEU
 #### Plot
 results_df <- as.data.frame(results_with_voom)
 results_df$feature <- rownames(results_df)
@@ -86,47 +90,35 @@ volcano_plot <- ggplot(results_df, aes(x = logFC, y = -log10(P.Value))) +
                   segment.color = 'grey50') +
   scale_color_manual(values = c("black", "red")) +
   theme_minimal() +
-  labs(title = "Volcano Plot", x = "Log2 Fold Change (HEU vs HEI)", y = "-Log10 P-value")
+  labs(title = "Volcano Plot Monocyte Fold Change HEI Vs HEU", x = "Log2 Fold Change (HEI vs HEU)", y = "-Log10 P-value")
 
 print(volcano_plot)
+ggsave(paste0(out.path,"HEIvsHEU_Monocytes_Volcano.png"),bg='white',plot=volcano_plot)
+#### Relationship with Viral Titre - Linear Mixed Model ####
 
-### Relationship with Viral Titre ###
-
-#Subset Data to HEI Group
-
-hei_data <- monocytes[monocytes$Group == "HEI", ]
-hei_covariates <- hei_data[covariate_columns]
-hei_percentage_monocytes <- hei_data[percentage_columns]
-hei_data$`Viral Titre` <- scale(hei_data$`Viral Titre`)
-str(hei_data)
-#Linear Mixed-Effects Models
-# Check for NULL values in the relevant columns
-sapply(hei_data[c("Viral Titre", "Age", "Sex", "PID")], is.null)
-
-# Check for NA values
-sapply(hei_data[c("Viral Titre", "Age", "Sex", "PID")], function(x) any(is.na(x)))
-
-# Convert 'Sex' to a factor if it's not already
-hei_covariates$Sex <- as.factor(hei_covariates$Sex)
-# Drop the 'Group' column from hei_covariates
-hei_covariates <- hei_covariates[, !(names(hei_covariates) %in% "Group")]
+monocytes
+covariates
 percentage_columns
 
-#######
+monocytes$`Viral Titre` <- scale(monocytes$`Viral Titre`)
+str(monocytes)
 
-# Ensure 'Sex' is correctly formatted as a factor, and 'PID' as a character or factor
-hei_data$Sex <- as.factor(hei_data$Sex)
-hei_data$PID <- as.factor(hei_data$PID)
+#Linear Mixed-Effects Models
+# Check for NULL values in the relevant columns
+sapply(monocytes[c("Viral Titre", "Age", "Sex", "PID","Group")], is.null)
+
+# Check for NA values
+sapply(monocytes[c("Viral Titre", "Age", "Sex", "PID","Group")], function(x) any(is.na(x)))
+
+# Convert 'Sex' and 'Group' to a factor if it's not already
+covariates$Sex <- as.factor(covariates$Sex)
+covariates$Group <- as.factor(covariates$Group)
 
 # Pre-define the part of the formula that remains constant
-fixed_part_of_formula <- "~ `Viral Titre` + Age + Sex + (1 | PID)"
+fixed_part_of_formula <- "~ `Viral Titre` + Age + Sex + Group + (1 | PID)"
 
 # Initialize lists to store results
 models_list <- list()
-summaries_list <- list()
-
-# Select just the first monocyte subset for this example
-subset_names <- percentage_columns[1]  # Adjust this to test more subsets iteratively
 
 # Loop through each monocyte subset, ensuring column names are correctly handled
 for (subset_name in percentage_columns) {
@@ -138,10 +130,11 @@ for (subset_name in percentage_columns) {
   
   # Convert the string to a formula
   current_formula <- as.formula(formula_str)
+
   
   # Fit the model using the current formula
   model <- tryCatch({
-    lmer(current_formula, data = hei_data)
+    lmer(current_formula, data = monocytes)
   }, error = function(e) {
     cat("Error in fitting model for subset:", subset_name, "\nError message:", e$message, "\n")
     return(NULL)  # Return NULL if there was an error fitting the model
@@ -153,103 +146,91 @@ for (subset_name in percentage_columns) {
   }
 }
 
+# Check Data Structure
+summary(models_list[[3]])
+summary(models_list[[3]])$coefficients
+
 # After running this loop, models_list will contain the fitted models for each subset
 
-#### Visualisations for Linear mIxed Model ####
+#### Visualizations for Linear mixed Model ####
+
 
 # Initialize an empty data frame to store the results
-results_df <- data.frame(
-  Subset = character(),
-  Estimate = numeric(),
-  Std.Error = numeric(),
-  CI.Low = numeric(),
-  CI.High = numeric(),
-  stringsAsFactors = FALSE
-)
+results_df <- data.frame(Subset = character(), Effect = character(), Estimate = numeric(), 
+                         Std.Error = numeric(), P.Value = numeric(), stringsAsFactors = FALSE)
 
 # Loop through each model to extract information
-for (subset_name in percentage_columns) {
+for (subset_name in names(models_list)) {
   model <- models_list[[subset_name]]
-  
-  # Extract fixed effects estimates
-  estimates <- summary(model)$coefficients
-  
-  # Check if `Viral Titre` is present in the model summary
-  if ("`Viral Titre`" %in% rownames(estimates)) {
-    # Extract estimate and standard error for `Viral Titre`
-    estimate <- estimates["`Viral Titre`", "Estimate"]
-    std_error <- estimates["`Viral Titre`", "Std. Error"]
-    
-    # Calculate confidence intervals
-    conf_int <- confint(model, level = 0.95, method = "Wald")["`Viral Titre`", ]
-    
-    # Append the results to the results_df
-    results_df <- rbind(results_df, data.frame(
-      Subset = subset_name,
-      Estimate = estimate,
-      Std.Error = std_error,
-      CI.Low = conf_int[1],
-      CI.High = conf_int[2]
-    ))
-  }
+  summary_model <- summary(model)
+  df <- as.data.frame(summary_model$coefficients)
+  df$Subset <- subset_name
+  df$Effect <- rownames(df)
+  results_df <- rbind(results_df, df)
 }
 
-### Coefficient Plot for Viral Load Effect Across Subsets
+# Adjust column names if needed based on the structure of your summary
+results_df <- results_df %>% 
+  rename(Estimate = Estimate, Std.Error = `Std. Error`, P.Value = `Pr(>|t|)`) %>%
+  select(Subset, Effect, Estimate, `Std.Error`, P.Value)
+results_df <- results_df[results_df$Subset != "Monopanel_CD45_Raw_Counts", ]
 
-filtered_results_df <- results_df[results_df$Subset != "Monopanel_CD45_Raw_Counts", ]
+# Filter for "Viral Titre" effects
 
-# Plotting the filtered results
-ggplot(filtered_results_df, aes(x = Estimate, y = reorder(Subset, Estimate))) +
-  geom_point() +
-  geom_errorbarh(aes(xmin = CI.Low, xmax = CI.High), height = 0.2) +
-  labs(title = "Effect of Viral Load on Monocyte Subsets",
-       x = "Effect Size (Estimate of Viral Load)", y = "Monocyte Subset") +
+viral_titre_effects <- results_df %>% filter(Effect == "`Viral Titre`")
+viral_titre_effects$Significance <- ifelse(viral_titre_effects$P.Value < 0.05, "*", "")
+
+viral_effect <- ggplot(viral_titre_effects, aes(x = reorder(Subset, Estimate), y = Estimate)) +
+  geom_col(fill = "skyblue") +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +  # Color the stars red
+  coord_flip() +
+  labs(title = "Effect of Viral Titre on Monocyte Subsets", x = "Monocyte Subset", y = "Effect Size") +
   theme_minimal()
 
-### Heatmap
+ggsave(paste0(out.path,"Viral_Effect_Monocytes_Coefficient_Plot.png"),bg='white',width=8, height=11.5,plot=viral_effect)
 
 
-# Assuming models_list is your list of lmer model objects
-p_values_list <- lapply(models_list, function(model) {
-  # Extract the summary
-  summary_model <- summary(model)
-  
-  # Find the row corresponding to 'Viral Titre' and extract the p-value
-  # Note: Adjust if your summary structure differs
-  if ("`Viral Titre`" %in% rownames(summary_model$coefficients)) {
-    p_value <- summary_model$coefficients["`Viral Titre`", "Pr(>|t|)"]
-  } else {
-    p_value <- NA  # Assign NA if 'Viral Titre' not found
-  }
-  
-  return(p_value)
-})
+# Filter for "Age" effects (-ve means as age increases subset size decreases)
 
-# Add the p-values to your results dataframe
-results_df$p_value <- unlist(p_values_list)
+age_effects <- results_df %>% filter(Effect == "Age")
+age_effects$Significance <- ifelse(age_effects$P.Value < 0.05, "*", "")
 
-# Assuming 'results_df' is structured with 'Subset' and 'Estimate' columns
-# Prepare the matrix for the heatmap
-heatmap_matrix <- matrix(filtered_results_df$Estimate, nrow = nrow(filtered_results_df), ncol = 1,
-                         dimnames = list(filtered_results_df$Subset, c("Viral Load Effect")))
+age_effect <- ggplot(age_effects, aes(x = reorder(Subset, Estimate), y = Estimate)) +
+  geom_col(fill = "skyblue") +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +  # Color the stars red
+  coord_flip() +
+  labs(title = "Effect of Age on Monocyte Subsets", x = "Monocyte Subset", y = "Effect Size") +
+  theme_minimal()
 
-# Plot the heatmap
-pheatmap(heatmap_matrix,
-         scale = "none",  # Or "row" depending on your preference
-         clustering_distance_rows = "euclidean",
-         clustering_distance_cols = "euclidean",
-         cluster_cols = FALSE,  # Disable column clustering
-         color = colorRampPalette(c("blue", "white", "red"))(100),
-         show_rownames = TRUE,
-         show_colnames = TRUE,
-         main = "Effect of Viral Load on Monocyte Subsets",
-         legend_title = "Effect Size")
+ggsave(paste0(out.path,"Age_Effect_Monocytes_Coefficient_Plot.png"),bg='white',width=8, height=11.5,plot=age_effect)
 
 
+# Filter for "SexMale" effects if "SexMale" indicates the effect of being male vs. baseline (female)
+sex_effects <- results_df %>% filter(Effect == "SexMale")
+sex_effects$Significance <- ifelse(sex_effects$P.Value < 0.05, "*", "")
 
+sex_effect <- ggplot(sex_effects, aes(x = reorder(Subset, Estimate), y = Estimate)) +
+  geom_col(fill = ifelse(sex_effects$Estimate > 0, "lightblue", "pink")) + # Color by direction of effect
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  coord_flip() +
+  labs(title = "Effect of Being Male on Monocyte Subsets", x = "Monocyte Subset", y = "Effect Size Difference") +
+  theme_minimal()
+ggsave(paste0(out.path,"Sex_Effect_Monocytes_Coefficient_Plot.png"),bg='white',width=8, height=11.5,plot=sex_effect)
 
+# Filter for "GroupHEI" effects if "GroupHEI" indicates the effect of being in HEU vs. baseline
+group_effects <- results_df %>% filter(Effect == "GroupHEI")
+group_effects$Significance <- ifelse(group_effects$P.Value < 0.05, "*", "")
 
+HEI_effect <- ggplot(group_effects, aes(x = reorder(Subset, Estimate), y = Estimate)) +
+  geom_col(fill = ifelse(group_effects$Estimate > 0, "lightgreen", "salmon")) + # Color by direction of effect
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +  # Color the stars red
+  coord_flip() +
+  labs(title = "Effect of HEI on Monocyte Subsets", x = "Monocyte Subset", y = "Effect Size Difference") +
+  theme_minimal()
 
-
-
+ggsave(paste0(out.path,"HIV_Effect_Monocytes_Coefficient_Plot.png"),bg='white',width=8, height=11.5,plot=HEI_effect)
 

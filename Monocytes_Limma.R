@@ -234,3 +234,88 @@ HEI_effect <- ggplot(group_effects, aes(x = reorder(Subset, Estimate), y = Estim
 
 ggsave(paste0(out.path,"HIV_Effect_Monocytes_Coefficient_Plot.png"),bg='white',width=8, height=11.5,plot=HEI_effect)
 
+#### Age and Sex Effect on HEI Alone ####
+
+# Subset data for HEI group only
+monocytes_HEI <- monocytes[monocytes$Group == "HEI", ]
+
+# Pre-define the part of the formula that remains constant (excluding 'Group')
+fixed_part_of_formula <- "~ `Viral Titre` + Age + Sex + (1 | PID)"
+
+# Initialize lists to store results
+models_list <- list()
+
+# Loop through each monocyte subset, ensuring column names are correctly handled
+for (subset_name in percentage_columns) {
+  # Escape subset_name if it contains special characters
+  escaped_subset_name <- paste0("`", gsub("/", "\\/", subset_name), "`")
+  
+  # Construct the formula string with escaped column names
+  formula_str <- paste(escaped_subset_name, fixed_part_of_formula)
+  
+  # Convert the string to a formula
+  current_formula <- as.formula(formula_str)
+  
+  
+  # Fit the model using the current formula
+  model <- tryCatch({
+    lmer(current_formula, data = monocytes_HEI)
+  }, error = function(e) {
+    cat("Error in fitting model for subset:", subset_name, "\nError message:", e$message, "\n")
+    return(NULL)  # Return NULL if there was an error fitting the model
+  })
+  
+  # Store the model if successfully fitted
+  if (!is.null(model)) {
+    models_list[[subset_name]] <- model
+  }
+}
+
+
+# Initialize an empty data frame to store the results
+results_df <- data.frame(Subset = character(), Effect = character(), Estimate = numeric(), 
+                         Std.Error = numeric(), P.Value = numeric(), stringsAsFactors = FALSE)
+
+# Loop through each model to extract information
+for (subset_name in names(models_list)) {
+  model <- models_list[[subset_name]]
+  summary_model <- summary(model)
+  df <- as.data.frame(summary_model$coefficients)
+  df$Subset <- subset_name
+  df$Effect <- rownames(df)
+  results_df <- rbind(results_df, df)
+}
+
+# Adjust column names if needed based on the structure of your summary
+results_df <- results_df %>% 
+  rename(Estimate = Estimate, Std.Error = `Std. Error`, P.Value = `Pr(>|t|)`) %>%
+  select(Subset, Effect, Estimate, `Std.Error`, P.Value)
+results_df <- results_df[results_df$Subset != "Monopanel_CD45_Raw_Counts", ]
+
+# Filter for "Age" effects (-ve means as age increases subset size decreases)
+
+age_effects <- results_df %>% filter(Effect == "Age")
+age_effects$Significance <- ifelse(age_effects$P.Value < 0.05, "*", "")
+
+age_effect <- ggplot(age_effects, aes(x = reorder(Subset, Estimate), y = Estimate)) +
+  geom_col(fill = "skyblue") +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +  # Color the stars red
+  coord_flip() +
+  labs(title = "Effect of Age on Monocyte Subsets in HEI Only", x = "Monocyte Subset", y = "Effect Size") +
+  theme_minimal()
+
+ggsave(paste0(out.path,"Age_Effect_monocytes_HEI_Coefficient_Plot.png"),bg='white',width=8, height=11.5,plot=age_effect)
+
+# Filter for "SexMale" effects if "SexMale" indicates the effect of being male vs. baseline (female)
+sex_effects <- results_df %>% filter(Effect == "SexMale")
+sex_effects$Significance <- ifelse(sex_effects$P.Value < 0.05, "*", "")
+
+sex_effect <- ggplot(sex_effects, aes(x = reorder(Subset, Estimate), y = Estimate)) +
+  geom_col(fill = ifelse(sex_effects$Estimate > 0, "lightblue", "pink")) + # Color by direction of effect
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  coord_flip() +
+  labs(title = "Effect of Being Male on Monocyte Subsets in HEI Only", x = "Monocyte Subset", y = "Effect Size Difference") +
+  theme_minimal()
+ggsave(paste0(out.path,"Sex_Effect_monocytes_HEI_Coefficient_Plot.png"),bg='white',width=8, height=11.5,plot=sex_effect)

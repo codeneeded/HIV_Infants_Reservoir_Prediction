@@ -73,7 +73,7 @@ fit_voom <- lmFit(v, design, block = covariates$PID, correlation = corfit$consen
 fit_voom <- eBayes(fit_voom)
 
 # Extract results
-results_with_voom <- topTable(fit_voom, coef = "GroupHEI")
+results_with_voom <- topTable(fit_voom, number=100, coef = "GroupHEI")
 
 # HEU vs HEI, +ve is higher in HEI, -ve is higher in HEU
 #### Plot
@@ -82,15 +82,29 @@ results_df$feature <- rownames(results_df)
 
 
 # Create the volcano plot
+# Add a new column for absolute logFC to help with sorting
+results_df$abs_logFC <- abs(results_df$logFC)
+
+# Order the dataframe by absolute logFC and get the top 10
+top_features <- results_df %>%
+  arrange(desc(abs_logFC)) %>%
+  slice(1:10) %>%
+  .$feature  # Extract just the feature names
+
+# Flag the top 10 features for labeling
+results_df$label_flag <- ifelse(results_df$feature %in% top_features, TRUE, FALSE)
+
 volcano_plot <- ggplot(results_df, aes(x = logFC, y = -log10(P.Value))) +
   geom_point(aes(color = adj.P.Val < 0.05), alpha = 0.5) +
-  geom_text_repel(aes(label = feature), 
+  geom_text_repel(data = filter(results_df, label_flag),  # Use filtered data for labeling
+                  aes(label = feature), 
                   box.padding = 0.35, 
                   point.padding = 0.5,
                   segment.color = 'grey50') +
   scale_color_manual(values = c("black", "red")) +
   theme_minimal() +
-  labs(title = "Volcano Plot Monocyte Fold Change HEI Vs HEU", x = "Log2 Fold Change (HEI vs HEU)", y = "-Log10 P-value")
+  labs(title = "Volcano Plot NK Fold Change HEI Vs HEU", x = "Log2 Fold Change (HEI vs HEU)", y = "-Log10 P-value")
+
 
 print(volcano_plot)
 ggsave(paste0(out.path,"HEIvsHEU_Monocytes_Volcano.png"),bg='white',plot=volcano_plot)

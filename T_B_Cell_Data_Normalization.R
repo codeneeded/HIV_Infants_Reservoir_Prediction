@@ -70,6 +70,8 @@ t_b_data_cleaned$`Lymphocytes` <- (t_b_data_cleaned$`Lymphocytes` / 100) * t_b_d
 # Initialize a copy of the dataset for corrected counts
 corrected_counts <- t_b_data_cleaned
 
+
+
 # Loop through each column to adjust percentages based on immediate parent
 for (col_name in names(t_b_data_cleaned)[-c(1:7)]) { # Exclude the first 7 columns that are not hierarchical
   immediate_parent_name <- get_immediate_parent_name(col_name)
@@ -84,6 +86,8 @@ for (col_name in names(t_b_data_cleaned)[-c(1:7)]) { # Exclude the first 7 colum
 
 # Update original dataframe with corrected counts
 t_b_data_cleaned <- corrected_counts
+sum(is.na(t_b_data))
+
 
 #### Normalize by converting to % of Lymphocytes/Single Cells/Live cells/CD45 column ####
 
@@ -96,7 +100,17 @@ for (i in 12:ncol(t_b_data_cleaned)) {
 
 # Dropping columns 1, 4, 5, 6, 7, 8, 9, 10 from t_b_data_cleaned
 t_b_data_cleaned <- t_b_data_cleaned[, -c(1, 4, 6, 7, 8, 9, 10)]
+sum(is.na(t_b_data_cleaned))
 
+#####
+
+rows_with_na <- which(rowSums(is.na(t_b_data_cleaned)) > 0)
+cols_with_na <- which(colSums(is.na(t_b_data_cleaned)) > 0)
+na_locations <- which(is.na(t_b_data_cleaned), arr.ind = TRUE)
+
+
+
+#####
 #### Column Renaming for easy visualisations ####
 colnames(t_b_data_cleaned)
 names(t_b_data_cleaned)[names(t_b_data_cleaned) == "Lymphocytes/Single Cells/Live cells/CD45"] <- "T_B_panel_CD45_Raw_Counts"
@@ -111,6 +125,12 @@ names(t_b_data_cleaned) <- gsub("B cells/Mature B cells", "Mature_B_Cells", name
 names(t_b_data_cleaned) <- gsub("B cells/Transitional", "Transitional_B_Cells", names(t_b_data_cleaned), fixed = TRUE)
 names(t_b_data_cleaned)[names(t_b_data_cleaned) == "HIV status"] <- "Group"
 colnames(t_b_data_cleaned)
+
+# Identify columns where not all values are 0
+cols_to_keep <- apply(t_b_data_cleaned, 2, function(x) !all(x == 0))
+
+# Subset the DataFrame to keep only those columns
+t_b_data_cleaned <- t_b_data_cleaned[, cols_to_keep]
 
 output_file <- paste0(out.path, "T_B_Cell_data_cleaned_normalized_to_CD45.csv")
 

@@ -1,0 +1,1271 @@
+---
+title: "Mixed Effects Model and Differential Abundance Analysis of Infants with HIV"
+author: "Akshay Iyer"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    fig_width: 10
+    fig_height: 8
+    number_sections: false
+---
+
+```{r Modeling, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+
+#### Libraries ####
+library(readxl)
+library(readr)
+library(limma)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(lmerTest)
+library(broom.mixed)
+library(pheatmap)
+library(DT)
+library(plotly)
+
+
+#### Paths ####
+
+in.path <- 'C:/Users/axi313/Documents/HIV_Infants_Reservoir_Prediction/Cleaned_datasets/'
+
+#### Read in Files ####
+t_b_data <- as.data.frame(read_csv(paste0(in.path,"T_B_Cell_data_cleaned_normalized_to_CD45.csv")))
+m_data <- as.data.frame(read_csv(paste0(in.path,"Monocyte_data_cleaned_normalized_to_CD45.csv")))
+d_data <- as.data.frame(read_csv(paste0(in.path,"DC_data_cleaned_normalized_to_CD45.csv")))
+nk_data <- as.data.frame(read_csv(paste0(in.path,"NK_data_cleaned_normalized_to_CD45.csv")))
+demographics <- as.data.frame(read_csv(paste0(in.path,"Viral_Titres.csv")))
+
+#### Clean Demographics ####
+
+# Get the names of all columns
+column_names <- names(demographics)
+
+# Swap the second and third column names
+column_names[c(2, 3)] <- column_names[c(3, 2)]
+
+# Reorder the dataframe based on the updated column names
+demographics <- demographics[column_names]
+
+
+#### Creat Dataframes for modeling ####
+
+# Monocytes
+monocytes <- inner_join(demographics, m_data, by = c("PID", "Age"))
+monocytes$Group <- as.factor(monocytes$Group)
+monocytes$Group <- relevel(monocytes$Group, ref = "HEU")
+monocytes$Sex <- as.factor(monocytes$Sex)
+monocytes$PID <- as.factor(monocytes$PID)
+monocytes <- select(monocytes, 
+                   -Monopanel_CD45_Raw_Counts) ### Remove Raw Panel Counts
+
+
+# Dendritic Cells
+dendritic <- inner_join(demographics, d_data, by = c("PID", "Age"))
+dendritic$Group <- as.factor(dendritic$Group)
+dendritic$Group <- relevel(dendritic$Group, ref = "HEU")
+dendritic$Sex <- as.factor(dendritic$Sex)
+dendritic$PID <- as.factor(dendritic$PID)
+dendritic <- select(dendritic, 
+                   -DCpanel_CD45_Raw_Counts) ### Remove Raw Panel Counts
+
+
+# NK Cells
+nkiller <- inner_join(demographics, nk_data, by = c("PID", "Age"))
+nkiller$Group <- as.factor(nkiller$Group)
+nkiller$Group <- relevel(nkiller$Group, ref = "HEU")
+nkiller$Sex <- as.factor(nkiller$Sex)
+nkiller$PID <- as.factor(nkiller$PID)
+nkiller <- select(nkiller, 
+                   -NKpanel_CD45_Raw_Counts) ### Remove Raw Panel Counts
+
+
+# T & B Cells
+t_b_cell <- inner_join(demographics, t_b_data, by = c("PID", "Age"))
+t_b_cell$Group <- as.factor(t_b_cell$Group)
+t_b_cell$Group <- relevel(t_b_cell$Group, ref = "HEU")
+t_b_cell$Sex <- as.factor(t_b_cell$Sex)
+t_b_cell$PID <- as.factor(t_b_cell$PID)
+t_b_cell <- select(t_b_cell, 
+                   -T_B_panel_CD45_Raw_Counts) ### Remove Raw Panel Counts
+
+# All Cells
+
+## Inner join the demographics and all other dataframes based on PID and Age (and group when needed)
+all_data <- inner_join(demographics, t_b_data, by = c("PID", "Age"))
+all_data <- inner_join(all_data, m_data, by = c("PID", "Age","Group"))
+all_data <- inner_join(all_data, d_data, by = c("PID", "Age","Group"))
+all_data <- inner_join(all_data, nk_data, by = c("PID", "Age","Group"))
+all_data$Group <- as.factor(all_data$Group)
+all_data$Group <- relevel(all_data$Group, ref = "HEU")
+all_data$Sex <- as.factor(all_data$Sex)
+all_data$PID <- as.factor(all_data$PID)
+all_data <- select(all_data, 
+                   -DCpanel_CD45_Raw_Counts, 
+                   -T_B_panel_CD45_Raw_Counts,
+                   -NKpanel_CD45_Raw_Counts,
+                   -Monopanel_CD45_Raw_Counts)
+
+#### Modeling with limma and voom ####
+
+covariate_columns <- c("PID", "Age", "Sex", "Viral Titre", "Group")
+
+# All
+
+all_data_percentage_columns <- setdiff(names(all_data), covariate_columns) # Extracting relevant columns
+all_data_covariates <- all_data[, covariate_columns] # Extracting relevant columns
+all_data_covariates$unique_id <- paste(all_data_covariates$PID, all_data_covariates$Age, sep = "_") # Combining PID and Age, create unique identifiers
+percentage_all_data <- all_data[, all_data_percentage_columns] # Extracting percentage data
+rownames(all_data_covariates) <- all_data_covariates$unique_id # Set row names of covariates to unique_id
+rownames(percentage_all_data) <- all_data_covariates$unique_id # Set row names of percentages to unique_id
+percentage_all_data_transposed <- t(percentage_all_data) #Transposing data to format for modeling
+filtered_data_all_data <- percentage_all_data[complete.cases(percentage_all_data), ] #Removing NA to prepare for modeling
+all_data_design <- model.matrix(~ Group + `Viral Titre` + Age + Sex, data = all_data_covariates) # Design matrix
+
+## Modeling with limma-voom
+
+all_data_v <- voom(percentage_all_data_transposed, all_data_design, plot = TRUE)
+all_data_corfit <- duplicateCorrelation(all_data_v, block = all_data_covariates$PID)
+all_data_fit_voom <- lmFit(all_data_v, all_data_design, block = all_data_covariates$PID, correlation = all_data_corfit$consensus)
+all_data_fit_voom <- eBayes(all_data_fit_voom)
+
+all_data_top_genes <- topTable(all_data_fit_voom, number=1000, coef = "GroupHEI")
+
+# Monocytes
+
+## Prepare Columns for modeling
+
+monocytes_percentage_columns <- setdiff(names(monocytes), covariate_columns) # Extracting relevant columns
+monocytes_covariates <- monocytes[, covariate_columns] # Extracting relevant columns
+monocytes_covariates$unique_id <- paste(monocytes_covariates$PID, monocytes_covariates$Age, sep = "_") # Combining PID and Age, create unique identifiers
+percentage_monocytes <- monocytes[, monocytes_percentage_columns] # Extracting percentage data
+rownames(monocytes_covariates) <- monocytes_covariates$unique_id # Set row names of covariates to unique_id
+rownames(percentage_monocytes) <- monocytes_covariates$unique_id # Set row names of percentages to unique_id
+percentage_monocytes_transposed <- t(percentage_monocytes) #Transposing data to format for modeling
+filtered_data_monocytes <- percentage_monocytes[complete.cases(percentage_monocytes), ] #Removing NA to prepare for modeling
+monocytes_design <- model.matrix(~ Group + `Viral Titre` + Age + Sex, data = monocytes_covariates) # Design matrix
+
+## Modeling with limma-voom
+
+monocytes_v <- voom(percentage_monocytes_transposed, monocytes_design, plot = TRUE)
+monocytes_corfit <- duplicateCorrelation(monocytes_v, block = monocytes_covariates$PID)
+monocytes_fit_voom <- lmFit(monocytes_v, monocytes_design, block = monocytes_covariates$PID, correlation = monocytes_corfit$consensus)
+monocytes_fit_voom <- eBayes(monocytes_fit_voom)
+
+monocytes_top_genes <- topTable(monocytes_fit_voom, number=1000, coef = "GroupHEI")
+
+# DC
+
+dendritic_percentage_columns <- setdiff(names(dendritic), covariate_columns) # Extracting relevant columns
+dendritic_covariates <- dendritic[, covariate_columns] # Extracting relevant columns
+dendritic_covariates$unique_id <- paste(dendritic_covariates$PID, dendritic_covariates$Age, sep = "_") # Combining PID and Age, create unique identifiers
+percentage_dendritic <- dendritic[, dendritic_percentage_columns] # Extracting percentage data
+rownames(dendritic_covariates) <- dendritic_covariates$unique_id # Set row names of covariates to unique_id
+rownames(percentage_dendritic) <- dendritic_covariates$unique_id # Set row names of percentages to unique_id
+percentage_dendritic_transposed <- t(percentage_dendritic) #Transposing data to format for modeling
+filtered_data_dendritic <- percentage_dendritic[complete.cases(percentage_dendritic), ] #Removing NA to prepare for modeling
+dendritic_design <- model.matrix(~ Group + `Viral Titre` + Age + Sex, data = dendritic_covariates) # Design matrix
+
+## Modeling with limma-voom
+
+dendritic_v <- voom(percentage_dendritic_transposed, dendritic_design, plot = TRUE)
+dendritic_corfit <- duplicateCorrelation(dendritic_v, block = dendritic_covariates$PID)
+dendritic_fit_voom <- lmFit(dendritic_v, dendritic_design, block = dendritic_covariates$PID, correlation = dendritic_corfit$consensus)
+dendritic_fit_voom <- eBayes(dendritic_fit_voom)
+
+dendritic_top_genes <- topTable(dendritic_fit_voom, number=1000, coef = "GroupHEI")
+
+# NK
+
+## Prepare Columns for modeling
+
+nkiller_percentage_columns <- setdiff(names(nkiller), covariate_columns) # Extracting relevant columns
+nkiller_covariates <- nkiller[, covariate_columns] # Extracting relevant columns
+nkiller_covariates$unique_id <- paste(nkiller_covariates$PID, nkiller_covariates$Age, sep = "_") # Combining PID and Age, create unique identifiers
+percentage_nkiller <- nkiller[, nkiller_percentage_columns] # Extracting percentage data
+rownames(nkiller_covariates) <- nkiller_covariates$unique_id # Set row names of covariates to unique_id
+rownames(percentage_nkiller) <- nkiller_covariates$unique_id # Set row names of percentages to unique_id
+percentage_nkiller_transposed <- t(percentage_nkiller) #Transposing data to format for modeling
+filtered_data_nkiller <- percentage_nkiller[complete.cases(percentage_nkiller), ] #Removing NA to prepare for modeling
+nkiller_design <- model.matrix(~ Group + `Viral Titre` + Age + Sex, data = nkiller_covariates) # Design matrix
+
+## Modeling with limma-voom
+
+nkiller_v <- voom(percentage_nkiller_transposed, nkiller_design, plot = TRUE)
+nkiller_corfit <- duplicateCorrelation(nkiller_v, block = nkiller_covariates$PID)
+nkiller_fit_voom <- lmFit(nkiller_v, nkiller_design, block = nkiller_covariates$PID, correlation = nkiller_corfit$consensus)
+nkiller_fit_voom <- eBayes(nkiller_fit_voom)
+
+nk_top_genes <- topTable(nkiller_fit_voom, number=1000, coef = "GroupHEI")
+
+# T and B Cells
+
+## Prepare Columns for modeling
+
+t_b_percentage_columns <- setdiff(names(t_b_cell), covariate_columns) # Extracting relevant columns
+t_b_covariates <- t_b_cell[, covariate_columns] # Extracting relevant columns
+t_b_covariates$unique_id <- paste(t_b_covariates$PID, t_b_covariates$Age, sep = "_") # Combining PID and Age, create unique identifiers
+percentage_t_b_cell <- t_b_cell[, t_b_percentage_columns] # Extracting percentage data
+rownames(t_b_covariates) <- t_b_covariates$unique_id # Set row names of covariates to unique_id
+rownames(percentage_t_b_cell) <- t_b_covariates$unique_id # Set row names of percentages to unique_id
+percentage_t_b_cell_transposed <- t(percentage_t_b_cell) #Transposing data to format for modeling
+filtered_data_t_b <- percentage_t_b_cell[complete.cases(percentage_t_b_cell), ] #Removing NA to prepare for modeling
+t_b_design <- model.matrix(~ Group + `Viral Titre` + Age + Sex, data = t_b_covariates) # Design matrix
+
+## Modeling with limma-voom
+
+t_b_v <- voom(percentage_t_b_cell_transposed, t_b_design, plot = TRUE)
+t_b_corfit <- duplicateCorrelation(t_b_v, block = t_b_covariates$PID)
+t_b_fit_voom <- lmFit(t_b_v, t_b_design, block = t_b_covariates$PID, correlation = t_b_corfit$consensus)
+t_b_fit_voom <- eBayes(t_b_fit_voom)
+
+t_b_top_genes <- topTable(t_b_fit_voom, number=1000, coef = "GroupHEI")
+
+#### Mixed Effects Models ####
+
+fixed_part_of_formula <- "~ `Viral Titre` + Age + Sex + Group + (1 | PID)"
+
+filter_top_effects <- function(data_frame) {
+  positive_effects <- data_frame %>% 
+    arrange(desc(Estimate)) %>% 
+    head(35)
+  
+  negative_effects <- data_frame %>% 
+    arrange(Estimate) %>% 
+    head(35)
+  
+  bind_rows(positive_effects, negative_effects)
+}
+
+## Monocytes
+
+monocytes$`Viral Titre` <- scale(monocytes$`Viral Titre`)
+# Initialize lists to store results
+monocytes_models_list <- list()
+
+# Loop through each NK subset, ensuring column names are correctly handled
+for (subset_name in monocytes_percentage_columns) {
+  # Escape subset_name if it contains special characters
+  escaped_subset_name <- paste0("`", gsub("/", "\\/", subset_name), "`")
+  
+  # Construct the formula string with escaped column names
+  formula_str <- paste(escaped_subset_name, fixed_part_of_formula)
+  
+  # Convert the string to a formula
+  current_formula <- as.formula(formula_str)
+  
+  
+  # Fit the model using the current formula
+  model <- tryCatch({
+    lmer(current_formula, data = monocytes)
+  }, error = function(e) {
+    cat("Error in fitting model for subset:", subset_name, "\nError message:", e$message, "\n")
+    return(NULL)  # Return NULL if there was an error fitting the model
+  })
+  
+  # Store the model if successfully fitted
+  if (!is.null(model)) {
+    monocytes_models_list[[subset_name]] <- model
+  }
+}
+# Initialize an empty data frame to store the results
+monocytes_results_df <- data.frame(Subset = character(), Effect = character(), Estimate = numeric(), 
+                                 Std.Error = numeric(), P.Value = numeric(), stringsAsFactors = FALSE)
+
+# Loop through each model to extract information
+for (subset_name in names(monocytes_models_list)) {
+  model <- monocytes_models_list[[subset_name]]
+  summary_model <- summary(model)
+  df <- as.data.frame(summary_model$coefficients)
+  df$Subset <- subset_name
+  df$Effect <- rownames(df)
+  monocytes_results_df <- rbind(monocytes_results_df, df)
+}
+
+monocytes_results_df <- monocytes_results_df %>% 
+  rename(Estimate = Estimate, Std.Error = `Std. Error`, P.Value = `Pr(>|t|)`) %>%
+  select(Subset, Effect, Estimate, `Std.Error`, P.Value)
+
+## Dendritic Cells
+
+dendritic$`Viral Titre` <- scale(dendritic$`Viral Titre`)
+# Initialize lists to store results
+dendritic_models_list <- list()
+
+# Loop through each NK subset, ensuring column names are correctly handled
+for (subset_name in dendritic_percentage_columns) {
+  # Escape subset_name if it contains special characters
+  escaped_subset_name <- paste0("`", gsub("/", "\\/", subset_name), "`")
+  
+  # Construct the formula string with escaped column names
+  formula_str <- paste(escaped_subset_name, fixed_part_of_formula)
+  
+  # Convert the string to a formula
+  current_formula <- as.formula(formula_str)
+  
+  
+  # Fit the model using the current formula
+  model <- tryCatch({
+    lmer(current_formula, data = dendritic)
+  }, error = function(e) {
+    cat("Error in fitting model for subset:", subset_name, "\nError message:", e$message, "\n")
+    return(NULL)  # Return NULL if there was an error fitting the model
+  })
+  
+  # Store the model if successfully fitted
+  if (!is.null(model)) {
+    dendritic_models_list[[subset_name]] <- model
+  }
+}
+# Initialize an empty data frame to store the results
+dendritic_results_df <- data.frame(Subset = character(), Effect = character(), Estimate = numeric(), 
+                                 Std.Error = numeric(), P.Value = numeric(), stringsAsFactors = FALSE)
+
+# Loop through each model to extract information
+for (subset_name in names(dendritic_models_list)) {
+  model <- dendritic_models_list[[subset_name]]
+  summary_model <- summary(model)
+  df <- as.data.frame(summary_model$coefficients)
+  df$Subset <- subset_name
+  df$Effect <- rownames(df)
+  dendritic_results_df <- rbind(dendritic_results_df, df)
+}
+
+dendritic_results_df <- dendritic_results_df %>% 
+  rename(Estimate = Estimate, Std.Error = `Std. Error`, P.Value = `Pr(>|t|)`) %>%
+  select(Subset, Effect, Estimate, `Std.Error`, P.Value)
+
+
+## NK Cells
+
+nkiller$`Viral Titre` <- scale(nkiller$`Viral Titre`)
+# Initialize lists to store results
+nkiller_models_list <- list()
+
+# Loop through each NK subset, ensuring column names are correctly handled
+for (subset_name in nkiller_percentage_columns) {
+  # Escape subset_name if it contains special characters
+  escaped_subset_name <- paste0("`", gsub("/", "\\/", subset_name), "`")
+  
+  # Construct the formula string with escaped column names
+  formula_str <- paste(escaped_subset_name, fixed_part_of_formula)
+  
+  # Convert the string to a formula
+  current_formula <- as.formula(formula_str)
+  
+  
+  # Fit the model using the current formula
+  model <- tryCatch({
+    lmer(current_formula, data = nkiller)
+  }, error = function(e) {
+    cat("Error in fitting model for subset:", subset_name, "\nError message:", e$message, "\n")
+    return(NULL)  # Return NULL if there was an error fitting the model
+  })
+  
+  # Store the model if successfully fitted
+  if (!is.null(model)) {
+    nkiller_models_list[[subset_name]] <- model
+  }
+}
+# Initialize an empty data frame to store the results
+nkiller_results_df <- data.frame(Subset = character(), Effect = character(), Estimate = numeric(), 
+                         Std.Error = numeric(), P.Value = numeric(), stringsAsFactors = FALSE)
+
+# Loop through each model to extract information
+for (subset_name in names(nkiller_models_list)) {
+  model <- nkiller_models_list[[subset_name]]
+  summary_model <- summary(model)
+  df <- as.data.frame(summary_model$coefficients)
+  df$Subset <- subset_name
+  df$Effect <- rownames(df)
+  nkiller_results_df <- rbind(nkiller_results_df, df)
+}
+
+nkiller_results_df <- nkiller_results_df %>% 
+  rename(Estimate = Estimate, Std.Error = `Std. Error`, P.Value = `Pr(>|t|)`) %>%
+  select(Subset, Effect, Estimate, `Std.Error`, P.Value)
+
+## T & B Cells
+
+t_b_cell$`Viral Titre` <- scale(t_b_cell$`Viral Titre`)
+# Initialize lists to store results
+t_b_cell_models_list <- list()
+
+# Loop through each NK subset, ensuring column names are correctly handled
+for (subset_name in t_b_percentage_columns) {
+  # Escape subset_name if it contains special characters
+  escaped_subset_name <- paste0("`", gsub("/", "\\/", subset_name), "`")
+  
+  # Construct the formula string with escaped column names
+  formula_str <- paste(escaped_subset_name, fixed_part_of_formula)
+  
+  # Convert the string to a formula
+  current_formula <- as.formula(formula_str)
+  
+  
+  # Fit the model using the current formula
+  model <- tryCatch({
+    lmer(current_formula, data = t_b_cell)
+  }, error = function(e) {
+    cat("Error in fitting model for subset:", subset_name, "\nError message:", e$message, "\n")
+    return(NULL)  # Return NULL if there was an error fitting the model
+  })
+  
+  # Store the model if successfully fitted
+  if (!is.null(model)) {
+    t_b_cell_models_list[[subset_name]] <- model
+  }
+}
+# Initialize an empty data frame to store the results
+t_b_cell_results_df <- data.frame(Subset = character(), Effect = character(), Estimate = numeric(), 
+                                 Std.Error = numeric(), P.Value = numeric(), stringsAsFactors = FALSE)
+
+# Loop through each model to extract information
+for (subset_name in names(t_b_cell_models_list)) {
+  model <- t_b_cell_models_list[[subset_name]]
+  summary_model <- summary(model)
+  df <- as.data.frame(summary_model$coefficients)
+  df$Subset <- subset_name
+  df$Effect <- rownames(df)
+  t_b_cell_results_df <- rbind(t_b_cell_results_df, df)
+}
+
+t_b_cell_results_df <- t_b_cell_results_df %>% 
+  rename(Estimate = Estimate, Std.Error = `Std. Error`, P.Value = `Pr(>|t|)`) %>%
+  select(Subset, Effect, Estimate, `Std.Error`, P.Value)
+
+## All Cells
+all_data$`Viral Titre` <- scale(all_data$`Viral Titre`)
+# Initialize lists to store results
+all_data_models_list <- list()
+
+# Loop through each NK subset, ensuring column names are correctly handled
+for (subset_name in all_data_percentage_columns) {
+  # Escape subset_name if it contains special characters
+  escaped_subset_name <- paste0("`", gsub("/", "\\/", subset_name), "`")
+  
+  # Construct the formula string with escaped column names
+  formula_str <- paste(escaped_subset_name, fixed_part_of_formula)
+  
+  # Convert the string to a formula
+  current_formula <- as.formula(formula_str)
+  
+  
+  # Fit the model using the current formula
+  model <- tryCatch({
+    lmer(current_formula, data = all_data)
+  }, error = function(e) {
+    cat("Error in fitting model for subset:", subset_name, "\nError message:", e$message, "\n")
+    return(NULL)  # Return NULL if there was an error fitting the model
+  })
+  
+  # Store the model if successfully fitted
+  if (!is.null(model)) {
+    all_data_models_list[[subset_name]] <- model
+  }
+}
+# Initialize an empty data frame to store the results
+all_data_results_df <- data.frame(Subset = character(), Effect = character(), Estimate = numeric(), 
+                                 Std.Error = numeric(), P.Value = numeric(), stringsAsFactors = FALSE)
+
+# Loop through each model to extract information
+for (subset_name in names(all_data_models_list)) {
+  model <- all_data_models_list[[subset_name]]
+  summary_model <- summary(model)
+  df <- as.data.frame(summary_model$coefficients)
+  df$Subset <- subset_name
+  df$Effect <- rownames(df)
+  all_data_results_df <- rbind(all_data_results_df, df)
+}
+
+all_data_results_df <- all_data_results_df %>% 
+  rename(Estimate = Estimate, Std.Error = `Std. Error`, P.Value = `Pr(>|t|)`) %>%
+  select(Subset, Effect, Estimate, `Std.Error`, P.Value)
+
+```
+
+## Study Design and Aims
+
+Insert model information here
+- How was data gathered, from whom?
+
+1. Differential Abundance Analysis - explanation
+2. Mixed Effect Models Explanation
+
+
+## Differential Abundance Analysis
+
+The "limma-voom" methodology is an analytical approach developed for the analysis of gene expression data, particularly from microarray and RNA sequencing experiments. It combines two components, "limma" (Linear Models for Microarray Data) and "voom" (Variance Modeling at the Observation Level), to identify differentially expressed genes across different experimental conditions.
+
+Limma uses linear models to assess differential expression, enabling the comparison of multiple groups or experimental conditions. limma is notable for its ability to handle complex experimental designs, incorporate multiple sources of variation, and efficiently manage the high-dimensional data typical of gene expression studies.
+
+
+Here we have adapted the model to give us fold-change for flow cytometry data, instead of differential expression, this is analysing differential abundance.
+
+### Normalisation with VOOM {.tabset}
+
+voom estimates the mean-variance relationship of the log-transformed counts, transforming the count data to a continuous scale that is suitable for linear modeling. It also assigns a weight to each observation, reflecting the reliability of each marker's expression measurement, which improves the statistical power and accuracy of differential abundance analyses.
+
+The following is essentialy how the data was normalized for downstream analysis
+
+#### All Populations Combined
+
+```{r results='hide'}
+
+voom(percentage_all_data_transposed, all_data_design, plot = TRUE)
+
+```
+
+#### Monocytes
+
+```{r results='hide'}
+
+voom(percentage_monocytes_transposed, monocytes_design, plot = TRUE)
+
+```
+
+
+#### Dendritic Cells
+
+```{r results='hide'}
+
+voom(percentage_dendritic_transposed, dendritic_design, plot = TRUE)
+
+```
+
+
+#### NK Cells
+
+```{r results='hide'}
+
+voom(percentage_nkiller_transposed, nkiller_design, plot = TRUE)
+
+```
+
+#### T and B Cells
+
+```{r results='hide'}
+
+voom(percentage_t_b_cell_transposed, t_b_design, plot = TRUE)
+
+```
+
+### Volcano Plots and Fold Change {.tabset}
+
+Volcano Plots are used to provide a visual representation of the fold change between HEI and HEU conditions. Positive foldchange is an increase in HEI with respect to HEU and negative fold change is the oposite. Multiple testing was performed and significant populations (padj <0.05) are colored in red.
+
+#### All Populations Combined {.tabset}
+
+##### Fold Change
+
+```{r}
+
+datatable(all_data_top_genes, options = list(pageLength = 10), filter = 'top', rownames = TRUE)
+
+```
+
+##### Volcano Plot
+
+```{r}
+all_data_top_genes <- as.data.frame(all_data_top_genes)
+all_data_top_genes$feature <- rownames(all_data_top_genes)
+
+# Add a new column for absolute logFC to help with sorting
+all_data_top_genes$abs_logFC <- abs(all_data_top_genes$logFC)
+
+# Order the dataframe by absolute logFC and get the top 10
+all_data_top_features <- all_data_top_genes %>%
+  arrange(desc(abs_logFC)) %>%
+  slice(1:10) %>%
+  .$feature  # Extract just the feature names
+
+# Flag the top 10 features for labeling
+all_data_top_genes$label_flag <- ifelse(all_data_top_genes$feature %in% all_data_top_features, TRUE, FALSE)
+
+
+all_data_volcano_plot <- ggplot(all_data_top_genes, aes(x = logFC, y = -log10(P.Value), text = paste("Cell Type:", feature, "<br>LogFC:", logFC, "<br>Adj. P-Val:", adj.P.Val))) +
+  geom_point(aes(color = adj.P.Val < 0.05), alpha = 0.5) +
+  geom_text_repel(data = dplyr::filter(all_data_top_genes, label_flag == TRUE), 
+                  aes(label = feature), 
+                  box.padding = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50', show.legend = FALSE) +
+  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "grey50")) +
+  theme_minimal() +
+  labs(title = "Volcano Plot All Cells Fold Change HEI Vs HEU", x = "Log2 Fold Change (HEI vs HEU)", y = "-Log10 P-value")
+
+# Convert the ggplot object to a plotly object
+all_data_interactive_volcano_plot <- ggplotly(all_data_volcano_plot, tooltip = "text")
+
+# Print the interactive plot object to display it in the RMarkdown HTML output
+all_data_interactive_volcano_plot
+
+```
+
+#### Monocytes {.tabset}
+
+##### Fold Change
+
+```{r}
+
+datatable(monocytes_top_genes, options = list(pageLength = 10), filter = 'top', rownames = TRUE)
+
+```
+
+##### Volcano Plot
+
+```{r}
+monocytes_top_genes <- as.data.frame(monocytes_top_genes)
+monocytes_top_genes$feature <- rownames(monocytes_top_genes)
+
+# Add a new column for absolute logFC to help with sorting
+monocytes_top_genes$abs_logFC <- abs(monocytes_top_genes$logFC)
+
+# Order the dataframe by absolute logFC and get the top 10
+monocytes_top_features <- monocytes_top_genes %>%
+  arrange(desc(abs_logFC)) %>%
+  slice(1:10) %>%
+  .$feature  # Extract just the feature names
+
+# Flag the top 10 features for labeling
+monocytes_top_genes$label_flag <- ifelse(monocytes_top_genes$feature %in% monocytes_top_features, TRUE, FALSE)
+
+
+monocytes_volcano_plot <- ggplot(monocytes_top_genes, aes(x = logFC, y = -log10(P.Value), text = paste("Cell Type:", feature, "<br>LogFC:", logFC, "<br>Adj. P-Val:", adj.P.Val))) +
+  geom_point(aes(color = adj.P.Val < 0.05), alpha = 0.5) +
+  geom_text_repel(data = dplyr::filter(monocytes_top_genes, label_flag == TRUE), 
+                  aes(label = feature), 
+                  box.padding = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50', show.legend = FALSE) +
+  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "grey50")) +
+  theme_minimal() +
+  labs(title = "Volcano Plot Monocytes Fold Change HEI Vs HEU", x = "Log2 Fold Change (HEI vs HEU)", y = "-Log10 P-value")
+
+# Convert the ggplot object to a plotly object
+monocytes_interactive_volcano_plot <- ggplotly(monocytes_volcano_plot, tooltip = "text")
+
+# Print the interactive plot object to display it in the RMarkdown HTML output
+monocytes_interactive_volcano_plot
+
+```
+
+#### Dendritic Cells {.tabset}
+
+##### Fold Change
+
+```{r}
+
+datatable(dendritic_top_genes, options = list(pageLength = 10), filter = 'top', rownames = TRUE)
+
+```
+
+##### Volcano Plot
+
+```{r}
+dendritic_top_genes <- as.data.frame(dendritic_top_genes)
+dendritic_top_genes$feature <- rownames(dendritic_top_genes)
+
+# Add a new column for absolute logFC to help with sorting
+dendritic_top_genes$abs_logFC <- abs(dendritic_top_genes$logFC)
+
+# Order the dataframe by absolute logFC and get the top 10
+dendritic_top_features <- dendritic_top_genes %>%
+  arrange(desc(abs_logFC)) %>%
+  slice(1:10) %>%
+  .$feature  # Extract just the feature names
+
+# Flag the top 10 features for labeling
+dendritic_top_genes$label_flag <- ifelse(dendritic_top_genes$feature %in% dendritic_top_features, TRUE, FALSE)
+
+
+dendritic_volcano_plot <- ggplot(dendritic_top_genes, aes(x = logFC, y = -log10(P.Value), text = paste("Cell Type:", feature, "<br>LogFC:", logFC, "<br>Adj. P-Val:", adj.P.Val))) +
+  geom_point(aes(color = adj.P.Val < 0.05), alpha = 0.5) +
+  geom_text_repel(data = dplyr::filter(dendritic_top_genes, label_flag == TRUE), 
+                  aes(label = feature), 
+                  box.padding = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50', show.legend = FALSE) +
+  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "grey50")) +
+  theme_minimal() +
+  labs(title = "Volcano Plot Dendritic Cell Fold Change HEI Vs HEU", x = "Log2 Fold Change (HEI vs HEU)", y = "-Log10 P-value")
+
+# Convert the ggplot object to a plotly object
+dendritic_interactive_volcano_plot <- ggplotly(dendritic_volcano_plot, tooltip = "text")
+
+# Print the interactive plot object to display it in the RMarkdown HTML output
+dendritic_interactive_volcano_plot
+
+```
+
+#### NK Cells {.tabset}
+
+##### Fold Change
+
+```{r}
+
+datatable(nk_top_genes, options = list(pageLength = 10), filter = 'top', rownames = TRUE)
+
+```
+
+##### Volcano Plot
+
+```{r}
+nk_top_genes <- as.data.frame(nk_top_genes)
+nk_top_genes$feature <- rownames(nk_top_genes)
+
+# Add a new column for absolute logFC to help with sorting
+nk_top_genes$abs_logFC <- abs(nk_top_genes$logFC)
+
+# Order the dataframe by absolute logFC and get the top 10
+nk_top_features <- nk_top_genes %>%
+  arrange(desc(abs_logFC)) %>%
+  slice(1:10) %>%
+  .$feature  # Extract just the feature names
+
+# Flag the top 10 features for labeling
+nk_top_genes$label_flag <- ifelse(nk_top_genes$feature %in% nk_top_features, TRUE, FALSE)
+
+
+nk_volcano_plot <- ggplot(nk_top_genes, aes(x = logFC, y = -log10(P.Value), text = paste("Cell Type:", feature, "<br>LogFC:", logFC, "<br>Adj. P-Val:", adj.P.Val))) +
+  geom_point(aes(color = adj.P.Val < 0.05), alpha = 0.5) +
+  geom_text_repel(data = dplyr::filter(nk_top_genes, label_flag == TRUE), 
+                  aes(label = feature), 
+                  box.padding = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50', show.legend = FALSE) +
+  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "grey50")) +
+  theme_minimal() +
+  labs(title = "Volcano Plot NK Cell Fold Change HEI Vs HEU", x = "Log2 Fold Change (HEI vs HEU)", y = "-Log10 P-value")
+
+# Convert the ggplot object to a plotly object
+nk_interactive_volcano_plot <- ggplotly(nk_volcano_plot, tooltip = "text")
+
+# Print the interactive plot object to display it in the RMarkdown HTML output
+nk_interactive_volcano_plot
+
+```
+
+
+#### T & B Cells {.tabset}
+
+##### Fold Change
+
+```{r}
+
+datatable(t_b_top_genes, options = list(pageLength = 10), filter = 'top', rownames = TRUE)
+
+```
+
+##### Volcano Plot
+
+```{r}
+t_b_top_genes <- as.data.frame(t_b_top_genes)
+t_b_top_genes$feature <- rownames(t_b_top_genes)
+
+# Add a new column for absolute logFC to help with sorting
+t_b_top_genes$abs_logFC <- abs(t_b_top_genes$logFC)
+
+# Order the dataframe by absolute logFC and get the top 10
+t_b_top_features <- t_b_top_genes %>%
+  arrange(desc(abs_logFC)) %>%
+  slice(1:10) %>%
+  .$feature  # Extract just the feature names
+
+# Flag the top 10 features for labeling
+t_b_top_genes$label_flag <- ifelse(t_b_top_genes$feature %in% t_b_top_features, TRUE, FALSE)
+
+
+t_b_volcano_plot <- ggplot(t_b_top_genes, aes(x = logFC, y = -log10(P.Value), text = paste("Cell Type:", feature, "<br>LogFC:", logFC, "<br>Adj. P-Val:", adj.P.Val))) +
+  geom_point(aes(color = adj.P.Val < 0.05), alpha = 0.5) +
+  geom_text_repel(data = dplyr::filter(t_b_top_genes, label_flag == TRUE), 
+                  aes(label = feature), 
+                  box.padding = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50', show.legend = FALSE) +
+  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "grey50")) +
+  theme_minimal() +
+  labs(title = "Volcano Plot T & B Cell Fold Change HEI Vs HEU", x = "Log2 Fold Change (HEI vs HEU)", y = "-Log10 P-value")
+
+# Convert the ggplot object to a plotly object
+t_b_interactive_volcano_plot <- ggplotly(t_b_volcano_plot, tooltip = "text")
+
+# Print the interactive plot object to display it in the RMarkdown HTML output
+t_b_interactive_volcano_plot
+
+```
+
+### Covariates Analysis
+
+This analyses the covariate effect size on each cell population ranked by effect size.The star indicates significance.
+
+#### Relationship with Viral Titre {.tabset}
+
+##### Combined Populations
+
+```{r fig.height=15}
+all_data_viral_titre_effects <- all_data_results_df %>% filter(Effect == "`Viral Titre`")
+all_data_viral_titre_effects$Significance <- ifelse(all_data_viral_titre_effects$P.Value < 0.05, "*", "")
+
+# Assuming all_data_viral_titre_effects is your dataframe
+all_data_viral_titre_effects <- all_data_viral_titre_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(all_data_viral_titre_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Viral Titre", x = "All Subsets", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### Monocytes
+
+```{r fig.height=15}
+
+monocytes_viral_titre_effects <- monocytes_results_df %>% filter(Effect == "`Viral Titre`")
+monocytes_viral_titre_effects$Significance <- ifelse(monocytes_viral_titre_effects$P.Value < 0.05, "*", "")
+
+# Assuming monocytes_viral_titre_effects is your dataframe
+monocytes_viral_titre_effects <- monocytes_viral_titre_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(monocytes_viral_titre_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Viral Titre on Monocytes", x = "Monocytes", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### NK Cells
+
+```{r fig.height=15}
+
+nkiller_viral_titre_effects <- nkiller_results_df %>% filter(Effect == "`Viral Titre`")
+nkiller_viral_titre_effects$Significance <- ifelse(nkiller_viral_titre_effects$P.Value < 0.05, "*", "")
+
+# Assuming nkiller_viral_titre_effects is your dataframe
+nkiller_viral_titre_effects <- nkiller_viral_titre_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(nkiller_viral_titre_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Viral Titre on NK Cells", x = "NK Subset", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### Dendritic Cells
+
+```{r fig.height=15}
+
+dendritic_viral_titre_effects <- dendritic_results_df %>% filter(Effect == "`Viral Titre`")
+dendritic_viral_titre_effects$Significance <- ifelse(dendritic_viral_titre_effects$P.Value < 0.05, "*", "")
+
+# Assuming dendritic_viral_titre_effects is your dataframe
+dendritic_viral_titre_effects <- dendritic_viral_titre_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(dendritic_viral_titre_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Viral Titre on Dendritic Cells", x = "DC Subset", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### T & B Cells
+
+```{r fig.height=15}
+
+t_b_viral_titre_effects <- t_b_cell_results_df %>% filter(Effect == "`Viral Titre`")
+t_b_viral_titre_effects$Significance <- ifelse(t_b_viral_titre_effects$P.Value < 0.05, "*", "")
+
+# Assuming t_b_viral_titre_effects is your dataframe
+t_b_viral_titre_effects <- t_b_viral_titre_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(t_b_viral_titre_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Viral Titre on T & B Subsets", x = "T & B Subsets", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+#### Relationship with HIV Status {.tabset}
+
+##### Combined Populations
+
+```{r fig.height=15}
+all_data_group_effects <- all_data_results_df %>% filter(Effect == "GroupHEI")
+all_data_group_effects$Significance <- ifelse(all_data_group_effects$P.Value < 0.05, "*", "")
+
+# Assuming all_data_group_effects is your dataframe
+all_data_group_effects <- all_data_group_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(all_data_group_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of HIV Status", x = "All Subsets", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### Monocytes
+
+```{r fig.height=15}
+
+monocytes_group_effects <- monocytes_results_df %>% filter(Effect == "GroupHEI")
+monocytes_group_effects$Significance <- ifelse(monocytes_group_effects$P.Value < 0.05, "*", "")
+
+# Assuming monocytes_group_effects is your dataframe
+monocytes_group_effects <- monocytes_group_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(monocytes_group_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of HIV Status on Monocytes", x = "Monocytes", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### NK Cells
+
+```{r fig.height=15}
+
+nkiller_group_effects <- nkiller_results_df %>% filter(Effect == "GroupHEI")
+nkiller_group_effects$Significance <- ifelse(nkiller_group_effects$P.Value < 0.05, "*", "")
+
+# Assuming nkiller_group_effects is your dataframe
+nkiller_group_effects <- nkiller_group_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(nkiller_group_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of HIV Status on NK Cells", x = "NK Subset", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### Dendritic Cells
+
+```{r fig.height=15}
+
+dendritic_group_effects <- dendritic_results_df %>% filter(Effect == "GroupHEI")
+dendritic_group_effects$Significance <- ifelse(dendritic_group_effects$P.Value < 0.05, "*", "")
+
+# Assuming dendritic_group_effects is your dataframe
+dendritic_group_effects <- dendritic_group_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(dendritic_group_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of HIV Status on Dendritic Cells", x = "DC Subset", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### T & B Cells
+
+```{r fig.height=15}
+
+t_b_group_effects <- t_b_cell_results_df %>% filter(Effect == "GroupHEI")
+t_b_group_effects$Significance <- ifelse(t_b_group_effects$P.Value < 0.05, "*", "")
+
+# Assuming t_b_group_effects is your dataframe
+t_b_group_effects <- t_b_group_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(t_b_group_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of HIV Status on T & B Subsets", x = "T & B Subsets", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+#### Relationship with Age {.tabset}
+
+##### Combined Populations
+
+```{r fig.height=15}
+all_data_age_effects <- all_data_results_df %>% filter(Effect == "Age")
+all_data_age_effects$Significance <- ifelse(all_data_age_effects$P.Value < 0.05, "*", "")
+
+# Assuming all_data_age_effects is your dataframe
+all_data_age_effects <- all_data_age_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(all_data_age_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Age", x = "All Subsets", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### Monocytes
+
+```{r fig.height=15}
+
+monocytes_age_effects <- monocytes_results_df %>% filter(Effect == "Age")
+monocytes_age_effects$Significance <- ifelse(monocytes_age_effects$P.Value < 0.05, "*", "")
+
+# Assuming monocytes_age_effects is your dataframe
+monocytes_age_effects <- monocytes_age_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(monocytes_age_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Age on Monocytes", x = "Monocytes", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### NK Cells
+
+```{r fig.height=15}
+
+nkiller_age_effects <- nkiller_results_df %>% filter(Effect == "Age")
+nkiller_age_effects$Significance <- ifelse(nkiller_age_effects$P.Value < 0.05, "*", "")
+
+# Assuming nkiller_age_effects is your dataframe
+nkiller_age_effects <- nkiller_age_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(nkiller_age_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Age on NK Cells", x = "NK Subset", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### Dendritic Cells
+
+```{r fig.height=15}
+
+dendritic_age_effects <- dendritic_results_df %>% filter(Effect == "Age")
+dendritic_age_effects$Significance <- ifelse(dendritic_age_effects$P.Value < 0.05, "*", "")
+
+# Assuming dendritic_age_effects is your dataframe
+dendritic_age_effects <- dendritic_age_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(dendritic_age_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Age on Dendritic Cells", x = "DC Subset", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### T & B Cells
+
+```{r fig.height=15}
+
+t_b_age_effects <- t_b_cell_results_df %>% filter(Effect == "Age")
+t_b_age_effects$Significance <- ifelse(t_b_age_effects$P.Value < 0.05, "*", "")
+
+# Assuming t_b_age_effects is your dataframe
+t_b_age_effects <- t_b_age_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(t_b_age_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Age on T & B Subsets", x = "T & B Subsets", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+#### Relationship with Gender {.tabset}
+
+##### Combined Populations
+
+```{r fig.height=15}
+all_data_sex_effects <- all_data_results_df %>% filter(Effect == "SexMale")
+all_data_sex_effects$Significance <- ifelse(all_data_sex_effects$P.Value < 0.05, "*", "")
+
+# Assuming all_data_sex_effects is your dataframe
+all_data_sex_effects <- all_data_sex_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(all_data_sex_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Sex", x = "All Subsets", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### Monocytes
+
+```{r fig.height=15}
+
+monocytes_sex_effects <- monocytes_results_df %>% filter(Effect == "SexMale")
+monocytes_sex_effects$Significance <- ifelse(monocytes_sex_effects$P.Value < 0.05, "*", "")
+
+# Assuming monocytes_sex_effects is your dataframe
+monocytes_sex_effects <- monocytes_sex_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(monocytes_sex_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Sex on Monocytes", x = "Monocytes", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### NK Cells
+
+```{r fig.height=15}
+
+nkiller_sex_effects <- nkiller_results_df %>% filter(Effect == "SexMale")
+nkiller_sex_effects$Significance <- ifelse(nkiller_sex_effects$P.Value < 0.05, "*", "")
+
+# Assuming nkiller_sex_effects is your dataframe
+nkiller_sex_effects <- nkiller_sex_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(nkiller_sex_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Sex on NK Cells", x = "NK Subset", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### Dendritic Cells
+
+```{r fig.height=15}
+
+dendritic_sex_effects <- dendritic_results_df %>% filter(Effect == "SexMale")
+dendritic_sex_effects$Significance <- ifelse(dendritic_sex_effects$P.Value < 0.05, "*", "")
+
+# Assuming dendritic_sex_effects is your dataframe
+dendritic_sex_effects <- dendritic_sex_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(dendritic_sex_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Sex on Dendritic Cells", x = "DC Subset", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```
+
+##### T & B Cells
+
+```{r fig.height=15}
+
+t_b_sex_effects <- t_b_cell_results_df %>% filter(Effect == "SexMale")
+t_b_sex_effects$Significance <- ifelse(t_b_sex_effects$P.Value < 0.05, "*", "")
+
+# Assuming t_b_sex_effects is your dataframe
+t_b_sex_effects <- t_b_sex_effects %>%
+  mutate(Color = ifelse(Estimate > 0, "lightblue", "lightgreen"),
+         Significance = ifelse(P.Value < 0.05, "*", ""))
+
+ggplot(filter_top_effects(t_b_sex_effects), aes(x = reorder(Subset, Estimate), y = Estimate, fill = Color)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = Estimate - `Std.Error`, ymax = Estimate + `Std.Error`), width = 0.4) +
+  geom_text(aes(label = Significance), vjust = -0.5, colour = "red") +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Effect of Sex on T & B Subsets", x = "T & B Subsets", y = "Effect Size") +
+  theme_minimal() +
+  guides(fill=FALSE) # Hide the legend for fill
+```

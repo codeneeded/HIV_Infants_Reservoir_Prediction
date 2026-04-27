@@ -1,37 +1,194 @@
-Analysis Ideas
-1. Longitudinal Data Analysis:
-Mixed-Effects Models: Understand how cell populations (as represented by gated flow cytometry data) change over time in HIV-infected versus uninfected groups.
-Research Question: How do specific cell populations evolve over time in HIV-infected patients compared to uninfected ones? Are there specific cell populations that show significant changes correlating with HIV infection status?
+# HIV Infant Reservoir Prediction — Immune Cell Correlates of Viral Persistence
 
-2. Correlation and Association Studies:
-Correlation Analysis: Investigate the correlation between different cell populations and HIV reservoir levels. This can help identify which cell populations are most associated with HIV reservoir sizes.
-Regression Analysis: Perform regression analysis to understand the relationship between cell populations (as independent variables) and HIV reservoir levels (as the dependent variable).
-Normalization: If different variables (cell populations) are on vastly different scales or have different units, normalization can help in comparing coefficients across variables.
-Log Transformation: For count data, especially if it's skewed, a log transformation can be helpful.
-Raw Counts: Can be used directly if they are not skewed and are on a similar scale.
-Research Question: Which cell populations are most strongly correlated with the size of the HIV reservoir? Do certain cell populations predict changes in the HIV reservoir size?
+> Longitudinal flow cytometry analysis of innate and adaptive immune cell populations in perinatally HIV-infected (HEI) and HIV-exposed uninfected (HEU) infants from Mozambique, using limma/voom and linear mixed-effects models to identify immune signatures of HIV reservoir size.
 
-3. Time-to-Event Analysis:
-Survival Analysis (Cox Proportional Hazards Model): If we have data on the progression of HIV infection or treatment response, survival analysis can be used to study the time until a particular event (e.g., viral suppression, CD4 count recovery). Do we have this? Any ideas for definable events?
-Research Question: Does the composition of certain cell populations affect the time to achieve viral suppression or immune recovery in HIV-infected patients?
-Proportional Hazards Assumption: In Cox proportional hazards models, the assumption is that covariates have a multiplicative effect on the hazard. If cell counts (or their transformations) meet this assumption, they can be used directly.
-Normalization: Not typically required unless you're including cell counts as covariates in a model with other variables on different scales.
+---
 
-4. Cluster Analysis:
+## Overview
 
-Hierarchical Clustering or K-means Clustering: These methods can be used to identify patterns or clusters within the cell population data, potentially revealing subgroups of patients with distinct immunological profiles.
-Research Question: Are there distinct immunological profiles (based on cell populations) among HIV-infected patients? How do these profiles relate to treatment response or disease progression?
+This repository contains R-based pipelines for analyzing multi-parameter flow cytometry data from the **Towards AIDS Remission Approaches (TARA) cohort** — a longitudinal study of HIV-exposed infected (HEI) and HIV-exposed uninfected (HEU) infants from Maputo, Mozambique. Infants were enrolled at the first postnatal visit (age 1–2 months), prior to antiretroviral therapy (ART) initiation, and followed longitudinally through 18 months of age.
 
-5. Machine Learning Approaches:
-Random Forests, Support Vector Machines, or Neural Networks: These can be used for classification (e.g., predicting HIV infection status) or regression tasks (e.g., predicting HIV reservoir size) based on cell population data.
-Research Question: Can machine learning models accurately predict HIV infection status or reservoir size based on flow cytometry data? What features (cell populations) are most important in these predictions?
-Feature Scaling: Methods like Support Vector Machines, K-means clustering, or Neural Networks require feature scaling for optimal performance.
-Decision Trees/Random Forests: These methods don’t require feature scaling.
-Data Transformation: Log transformation or other transformations might be necessary for skewed data.
+The central goal is to identify **immune cell phenotypic correlates of HIV reservoir size** (quantified by viral titre) and to characterize how specific innate and adaptive immune compartments differ between HEI and HEU infants over time. Each immune cell compartment is analyzed in a parallel, modular pipeline.
 
-Potential Additional Questions:
-How do antiretroviral therapies affect different cell populations?
-Is there a relationship between the diversity of cell populations and the effectiveness of the immune response in HIV-infected patients?
-Can certain cell population profiles be used as biomarkers for disease progression or treatment response?
+---
 
-model to predict change in reservoir in between timepoints using change in phenotype data
+## Scientific Background
+
+In perinatal HIV infection, early ART is recommended to limit reservoir seeding, but questions remain about which immune cell populations shape reservoir dynamics. This repository investigates:
+
+1. **HEI vs. HEU differences** — Which cell subsets are differentially abundant or activated between HIV-infected and HIV-exposed-uninfected infants?
+2. **Viral titre as a predictor** — How do individual immune cell subset frequencies associate with HIV reservoir size (viral titre)?
+3. **Age effects** — How do immune populations evolve over the first 18 months of life, and does infection status modify this trajectory?
+4. **Sex effects** — Are there sex-based differences in immune subset frequencies?
+5. **Group effects (HEI vs. HEU)** — Which cell subsets remain persistently altered in HEI after ART?
+6. **Reservoir prediction** — Can change in immune phenotype between time points predict change in reservoir size?
+
+---
+
+## Cohort
+
+| Feature | Details |
+|---|---|
+| **Cohort** | TARA (Towards AIDS Remission Approaches) |
+| **Location** | Maputo, Mozambique |
+| **Groups** | HEI (HIV exposed, infected) and HEU (HIV exposed, uninfected) |
+| **Enrollment** | First postnatal visit, age 1–2 months (pre-ART) |
+| **Follow-up** | Longitudinal, up to 18 months of age |
+| **Reservoir measure** | HIV viral titre (copies/mL), normalized and scaled |
+| **Immunophenotyping** | Multi-parameter flow cytometry (FlowJo gating, normalized to CD45+ cells) |
+
+---
+
+## Repository Structure
+
+```
+HIV_Infants_Reservoir_Prediction/
+│
+├── Cleaned_Datasets/                          # Normalized, CD45-scaled flow cytometry data + viral titres
+├── Clinical_Dataset/                          # Demographic and clinical metadata
+│
+├── NK_Mixed_Model_Output/                     # NK cell model outputs and figures
+├── Monocyte_Mixed_Model_Output/               # Monocyte model outputs and figures
+├── DC_Mixed_Model_Output/                     # Dendritic cell model outputs and figures
+├── T_B_Mixed_Model_Output/                    # T and B cell model outputs and figures
+├── Total_Mixed_Model_Output/                  # Combined/total immune panel outputs
+│
+├── NK_Data_Normalization.R                    # Normalize NK flow data to CD45+ counts
+├── NK_Limma.R                                 # Limma/voom + mixed-effects modeling for NK cells
+│
+├── Monocyte_Data_Normalization.R              # Normalize monocyte data
+├── Monocytes_Limma.R                          # Limma/voom + mixed-effects modeling for monocytes
+│
+├── DC_Data_Normalization.R                    # Normalize dendritic cell data
+├── DC_Limma.R                                 # Limma/voom + mixed-effects modeling for DCs
+│
+├── T_B_Cell_Data_Normalization.R              # Normalize T and B cell data
+├── T_B_Cell_Limma.R                           # Limma/voom + mixed-effects modeling for T/B cells
+│
+├── Total_Limma.R                              # Combined analysis across all cell types
+├── Demographics_Database_Cleaning.R           # Clean and merge demographic/clinical data
+│
+├── HIV_Infants_Mixed_Model_Analysis_Report.Rmd  # R Markdown analysis report
+├── HIV_Infants_Mixed_Model_Analysis_Report.html # Rendered HTML report
+│
+├── HIV_Infants_Reservoir_Prediction.Rproj    # RStudio project file
+└── README.md
+```
+
+---
+
+## Analysis Pipeline
+
+Each immune compartment follows the same modular two-step pipeline:
+
+### Step 1 — Data Normalization (`*_Data_Normalization.R`)
+- Reads raw flow cytometry Excel sheets
+- Normalizes cell subset frequencies to total CD45⁺ live lymphocytes
+- Exports cleaned, normalized CSVs to `Cleaned_Datasets/`
+
+### Step 2 — Statistical Modeling (`*_Limma.R`)
+Each Limma script performs two complementary analyses:
+
+**A. Differential Abundance (limma/voom)**
+- Transposes normalized flow data into a features × samples matrix
+- Applies `voom` transformation to stabilize variance
+- Accounts for repeated measures using `duplicateCorrelation` (blocking on `PID`)
+- Design matrix: `~ Group + Viral Titre + Age + Sex`
+- Compares HEI vs. HEU (`GroupHEI` coefficient)
+- Outputs: volcano plots of top differentially abundant subsets (FDR < 0.05 highlighted)
+
+**B. Linear Mixed-Effects Models (lmerTest)**
+- Fits per-subset models: `subset ~ Viral Titre + Age + Sex + Group + (1 | PID)`
+- Extracts fixed-effect coefficients for Viral Titre, Age, Sex, and Group
+- Generates coefficient bar plots with error bars and significance stars for each effect
+- Outputs: four coefficient plots per cell type (Viral Titre, Age, Sex, HEI group effect)
+
+---
+
+## Cell Compartments Analyzed
+
+| Compartment | Script Pair | Key Subsets |
+|---|---|---|
+| **NK cells** | `NK_Data_Normalization.R` / `NK_Limma.R` | CD56bright, CD56dimCD16−, CD56dimCD16+, CD56−CD16+ (dysfunctional) |
+| **Monocytes** | `Monocyte_Data_Normalization.R` / `Monocytes_Limma.R` | Classical (CM), Intermediate (IM), Non-classical (NCM) |
+| **Dendritic Cells** | `DC_Data_Normalization.R` / `DC_Limma.R` | mDC, pDC, cDC subsets |
+| **T & B Cells** | `T_B_Cell_Data_Normalization.R` / `T_B_Cell_Limma.R` | CD4, CD8 T cell subsets, B cell populations |
+| **Total Panel** | `Total_Limma.R` | All subsets combined |
+
+---
+
+## Outputs Per Cell Type
+
+Each compartment produces the following output files in its respective `*_Mixed_Model_Output/` folder:
+
+| File | Description |
+|---|---|
+| `HEIvsHEU_<type>_Volcano.png` | Volcano plot — HEI vs HEU differential abundance |
+| `Viral_Effect_<type>_Coefficient_Plot.png` | Effect of viral titre on each subset |
+| `Age_Effect_<type>_Coefficient_Plot.png` | Effect of age on each subset |
+| `Sex_Effect_<type>_Coefficient_Plot.png` | Effect of sex (Male vs. Female) on each subset |
+| `HIV_Effect_<type>_Coefficient_Plot.png` | HEI vs. HEU group effect on each subset |
+
+---
+
+## Dependencies
+
+All scripts are written in **R**. Required packages:
+
+| Package | Purpose |
+|---|---|
+| `readxl` / `readr` | Data ingestion |
+| `limma` | Differential analysis with voom transformation |
+| `lmerTest` | Linear mixed-effects models |
+| `broom.mixed` | Tidy extraction of mixed model results |
+| `dplyr` | Data manipulation |
+| `ggplot2` | Visualization |
+| `ggrepel` | Non-overlapping labels on volcano plots |
+| `pheatmap` | Heatmap visualizations |
+
+Install via:
+
+```r
+install.packages(c("readxl", "readr", "dplyr", "ggplot2", "ggrepel", "pheatmap",
+                   "lmerTest", "broom.mixed"))
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+BiocManager::install("limma")
+```
+
+---
+
+## Usage
+
+1. Clone the repository and open `HIV_Infants_Reservoir_Prediction.Rproj` in RStudio.
+2. Update the input/output paths in each script:
+
+```r
+in.path  <- 'path/to/Cleaned_Datasets/'
+out.path <- 'path/to/NK_Mixed_Model_Output/'
+```
+
+3. Run normalization scripts first to generate cleaned CSVs, then run the corresponding Limma scripts.
+4. Render `HIV_Infants_Mixed_Model_Analysis_Report.Rmd` for a full interactive report.
+
+**Recommended run order:**
+```
+Demographics_Database_Cleaning.R
+→ *_Data_Normalization.R (one per cell type)
+→ *_Limma.R (one per cell type)
+→ Total_Limma.R
+→ HIV_Infants_Mixed_Model_Analysis_Report.Rmd
+```
+
+> ⚠️ **Note:** Raw flow cytometry data and identifiable clinical data are not included in this repository due to participant privacy. Contact the study team for data access.
+
+---
+
+## Citation
+
+If you use this code, please cite this repository and acknowledge the TARA cohort and the University of Miami Pahwa Laboratory.
+
+---
+
+## Contact
+
+For questions or collaboration, please open an [issue](https://github.com/codeneeded/HIV_Infants_Reservoir_Prediction/issues) in this repository.
